@@ -2,6 +2,9 @@
 
 An AI-powered assistant to automate and enhance circuit simulations using LTspice. This project integrates Python scripting with Large Language Models (LLMs) to streamline the workflow of creating, running, and analyzing SPICE simulations.
 
+[![GitHub Repository](https://img.shields.io/badge/GitHub-Repository-blue.svg)](https://github.com/kongpop10/LTSPICE-AI)
+
+
 ---
 
 ## Features
@@ -31,9 +34,7 @@ project-root/
 │   ├── settings.json          # User configuration file
 │   ├── settings_manager.py    # User settings management
 │   ├── saved_circuits/        # Example or saved circuit files
-│   ├── test_dir/              # Test directory
 │   └── __pycache__/           # Python cache files
-├── instructions/              # Project documentation and planning
 └── saved_circuits/            # Storage for user circuit files
 ```
 
@@ -44,8 +45,8 @@ project-root/
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/yourusername/ltspice-ai-assistant.git
-cd ltspice-ai-assistant
+git clone https://github.com/kongpop10/LTSPICE-AI.git
+cd LTSPICE-AI
 ```
 
 2. **Create and activate a virtual environment**
@@ -60,10 +61,21 @@ source venv/bin/activate  # On Linux/macOS
 3. **Install dependencies**
 
 ```bash
-pip install numpy scipy matplotlib pyltspice openai streamlit
+pip install numpy scipy matplotlib pyltspice openai streamlit python-dotenv
 ```
 
-4. **Configure LTspice Path**
+4. **Configure Environment Variables**
+
+Create a `.env` file in the project root with your API keys:
+
+```
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+# Add any other API keys as needed
+```
+
+The application uses these environment variables to authenticate with the LLM API services. You can obtain an OpenRouter API key by signing up at [OpenRouter](https://openrouter.ai/).
+
+5. **Configure LTspice Path**
 
 Ensure LTspice is installed on your system. Update the path in the settings (`settings.json`) or via the assistant interface.
 
@@ -87,13 +99,15 @@ Follow the prompts or integrate the modules into your own Python scripts.
 
 ---
 
-## Documentation
+## Screenshots
 
-See the `instructions/` directory for detailed documentation on project phases, design decisions, and usage examples:
+### AI Response to Circuit Request
+![AI Response to Circuit Request](Screenshot1.png)
+*The LTspice AI Assistant generates a netlist based on your natural language description and provides an AI summary of the changes made.*
 
-- `Plan.md`
-- `PyLTSPICE.md`
-- `phase0.md` through `phase5.md`
+### Simulation Results Visualization
+![Simulation Results Visualization](Screenshot2.png)
+*After running a simulation, the assistant displays the results in an interactive plot where you can select variables and customize the view.*
 
 ---
 
