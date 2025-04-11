@@ -18,7 +18,8 @@ from file_utils import open_file_with_default_app
 from raw_parser import parse_raw_file
 
 # --- Constants ---
-SAVED_CIRCUITS_DIR = "saved_circuits"
+# Use absolute path to the root-level saved_circuits directory
+SAVED_CIRCUITS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "saved_circuits")
 
 # --- Initialize Session State ---
 # Configuration Settings (Load once at the start)
@@ -41,6 +42,8 @@ if 'last_sim_temp_dir' not in st.session_state:
     st.session_state['last_sim_temp_dir'] = None
 if 'llm_raw_response' not in st.session_state:
     st.session_state['llm_raw_response'] = None
+if 'ai_summary_message' not in st.session_state:
+    st.session_state['ai_summary_message'] = None
 
 if 'need_sidebar_refresh' not in st.session_state:
     st.session_state['need_sidebar_refresh'] = False
@@ -274,6 +277,12 @@ st.session_state.user_input = st.text_area(
 user_input = st.session_state.user_input # Get the value for processing
 
 st.header("Current Netlist")
+
+# Display AI summary message if available
+ai_summary = st.session_state.get('ai_summary_message')
+if ai_summary:
+    st.info(f"**AI Summary:** {ai_summary}")
+
 # Ensure text area displays the current state value directly
 # Do NOT assign to st.session_state.netlist_area here, let rerun handle it.
 netlist_display_value = st.session_state.get('current_netlist', INITIAL_NETLIST)
@@ -350,9 +359,10 @@ with col1:
                     else:
                         # Normal processing for valid responses
                         st.session_state['llm_raw_response'] = llm_response # Store for debugging
-                        new_netlist = extract_spice_netlist(llm_response)
+                        new_netlist, summary_message = extract_spice_netlist(llm_response)
                         if new_netlist:
                             st.session_state['current_netlist'] = new_netlist
+                            st.session_state['ai_summary_message'] = summary_message
                             st.success("Netlist updated!") # Use temporary success message
                             st.session_state['user_input'] = "" # Clear input field after success
                             st.rerun()
@@ -420,11 +430,12 @@ with col2:
                         st.stop() # Stop execution for this button press
                     else:
                         # Normal processing for valid responses
-                        modified_netlist = extract_spice_netlist(llm_response)
+                        modified_netlist, summary_message = extract_spice_netlist(llm_response)
                         if modified_netlist and re.search(r'^\s*\.(tran|ac|op|dc|noise|tf)\s+', modified_netlist, re.IGNORECASE | re.MULTILINE):
                             st.success("AI added a simulation command to the netlist.")
                             # Update the session state AND the text area for user visibility
                             st.session_state['current_netlist'] = modified_netlist
+                            st.session_state['ai_summary_message'] = summary_message
                             netlist_to_simulate = modified_netlist # Use the modified one for the run
                             # For now, let's just use the modified netlist for simulation.
                             # We might need a rerun here if we want the user to *see* the change before sim runs.
@@ -545,6 +556,8 @@ with col4:
     if st.button("🗑️ Clear All", use_container_width=True): # Added icon
          st.session_state['current_netlist'] = INITIAL_NETLIST
          st.session_state['user_input'] = "" # Clear user input state too
+         # Clear AI summary message
+         st.session_state['ai_summary_message'] = None
          # Clear potential raw response display
          if 'llm_raw_response' in st.session_state:
               del st.session_state['llm_raw_response']

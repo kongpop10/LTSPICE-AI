@@ -33,9 +33,8 @@ project-root/
 │   ├── raw_parser.py          # Parsing LTspice .raw files
 │   ├── settings.json          # User configuration file
 │   ├── settings_manager.py    # User settings management
-│   ├── saved_circuits/        # Example or saved circuit files
 │   └── __pycache__/           # Python cache files
-└── saved_circuits/            # Storage for user circuit files
+└── saved_circuits/            # Storage for circuit files
 ```
 
 ---
