@@ -305,7 +305,7 @@ st.session_state['current_netlist'] = netlist_display
 
 
 # --- Buttons ---
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 with col1:
     if st.button("⚡ Generate/Update Netlist", use_container_width=True):
         # Check config from session state
@@ -772,16 +772,6 @@ with col2:
                 st.session_state['need_sidebar_refresh'] = False  # Reset the flag to avoid infinite reruns
                 st.rerun() # Rerun to update the UI
 with col3:
-    if st.button("👁️ View Raw File", use_container_width=True): # Updated for Phase 3
-        raw_file_path = st.session_state.get('last_raw_file')
-        if raw_file_path and os.path.isfile(raw_file_path):
-            if open_file_with_default_app(raw_file_path):
-                st.toast("Opening simulation results in LTSPICE...", icon="📈")
-            else:
-                st.error(f"Failed to open RAW file: {raw_file_path}. Is LTSPICE installed and associated with .raw files?")
-        else:
-            st.warning("No simulation results (.raw) file available. Run a simulation first.")
-with col4:
     if st.button("🗑️ Clear All", use_container_width=True): # Added icon
          st.session_state['current_netlist'] = EMPTY_NETLIST # Use empty string instead of INITIAL_NETLIST
          st.session_state['user_input'] = "" # Clear user input state too
