@@ -9,10 +9,13 @@ Guidelines:
 - Assume Node 0 is the ground node unless otherwise specified.
 - Include necessary control statements if requested (like .tran, .ac, .op). If no simulation is requested, do not add any simulation commands.
 - Ensure the netlist ends with a `.end` statement.
-- Output *only* the SPICE netlist content, enclosed in a single markdown code block (```spice ... ```). Do not include any other explanatory text before or after the code block.
+- First provide a brief explanation of the circuit you're creating, then output the SPICE netlist content enclosed in a markdown code block (```spice ... ```).
+- You may also add explanatory text after the code block if needed to explain component choices or circuit behavior.
 
 Example Request: "A 5V voltage source V1 between node 1 and ground, a 1k resistor R1 between node 1 and 2, and a 1uF capacitor C1 between node 2 and ground."
 Example Output:
+I've created a simple RC circuit with a 5V source connected to a 1k resistor and 1uF capacitor.
+
 ```spice
 * Generated from description
 V1 1 0 5V
@@ -20,6 +23,8 @@ R1 1 2 1k
 C1 2 0 1uF
 .end
 ```
+
+This circuit has a time constant of 1ms (R*C = 1k * 1uF).
 
 Now, generate the LTSPICE netlist for the following user request:
 --- User Request ---
@@ -38,7 +43,8 @@ Guidelines:
 - Apply the requested changes accurately (e.g., change component values, add components, remove components, modify connections).
 - Ensure the resulting netlist remains valid LTSPICE syntax.
 - Ensure the netlist still ends with a `.end` statement.
-- Output *only* the complete, modified SPICE netlist content, enclosed in a single markdown code block (```spice ... ```). Do not include any other explanatory text.
+- First provide a brief explanation of the changes you're making, then output the complete, modified SPICE netlist content enclosed in a markdown code block (```spice ... ```).
+- You may also add explanatory text after the code block if needed to explain the impact of the changes.
 
 Example Current Netlist:
 ```spice
@@ -50,6 +56,8 @@ C1 2 0 1uF
 ```
 Example Modification Request: "Change the value of R1 to 500 ohms and add a .tran 1ms simulation command."
 Example Output:
+I've changed R1 from 1k to 500 ohms and added a transient analysis command.
+
 ```spice
 * Simple RC Circuit - Modified
 V1 1 0 5V
@@ -58,6 +66,8 @@ C1 2 0 1uF
 .tran 1ms
 .end
 ```
+
+Reducing R1 will increase the current through the circuit and change the RC time constant from 1ms to 0.5ms.
 
 Now, modify the following current netlist based on the user's request.
 
@@ -130,13 +140,15 @@ Rules:
 {existing_netlist}
 ```
 2.  Check if any simulation command (.tran, .ac, .op, .dc, .noise, .tf) is already present.
-3.  If one or more simulation commands ARE ALREADY PRESENT, return the ORIGINAL netlist exactly as provided, enclosed in ```spice ... ```. Do NOT add another command.
+3.  If one or more simulation commands ARE ALREADY PRESENT, first explain that the netlist already has a simulation command, then return the ORIGINAL netlist exactly as provided, enclosed in ```spice ... ```.
 4.  If NO simulation command is found:
+    *   First explain what simulation command you're adding and why it's appropriate for this circuit.
     *   Determine a suitable default command.
         *   If the circuit contains time-varying sources (e.g., SIN, PULSE) or reactive components (C, L) suggesting transient behavior, add a transient analysis command like `.tran 0 1ms 0 10us UIC`.
         *   If the circuit seems purely DC (only DC sources V/I and resistors R), add an operating point command: `.op`.
         *   If unsure, default to `.op`.
     *   Insert the chosen command on a new line just before the `.end` statement.
     *   Return the MODIFIED netlist enclosed in ```spice ... ```.
-5.  Ensure the final output contains ONLY the final netlist within a single ```spice ... ``` block and nothing else.
+    *   After the code block, you may add additional explanation about what the simulation command will do.
+5.  Your response should include explanatory text before and optionally after the netlist code block.
 """

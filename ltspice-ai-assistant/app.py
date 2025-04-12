@@ -16,6 +16,8 @@ from prompts import NETLIST_GENERATION_PROMPT_TEMPLATE, NETLIST_MODIFICATION_PRO
 from ltspice_runner import run_ltspice_simulation, cleanup_simulation_files # Will be refactored later
 from file_utils import open_file_with_default_app
 from raw_parser import parse_raw_file
+# Use the fixed netlist parser
+from netlist_parser_fixed import extract_plot_directives
 
 # --- Constants ---
 # Use absolute path to the root-level saved_circuits directory
@@ -28,6 +30,7 @@ if 'config' not in st.session_state:
 
 # Other session state variables
 INITIAL_NETLIST = "* Enter circuit description above and click Generate/Update\n*\n* Example: A 5V source V1 across 1k resistor R1\n\n.end"
+EMPTY_NETLIST = "" # Empty string for cleared state
 if 'current_netlist' not in st.session_state:
     st.session_state['current_netlist'] = INITIAL_NETLIST
 if 'user_input' not in st.session_state:
@@ -55,6 +58,8 @@ if 'available_variables' not in st.session_state:
     st.session_state['available_variables'] = None
 if 'selected_variables' not in st.session_state:
     st.session_state['selected_variables'] = []
+if 'plot_directive_nodes' not in st.session_state:
+    st.session_state['plot_directive_nodes'] = []
 if 'log_x_axis' not in st.session_state:
     st.session_state['log_x_axis'] = False
 if 'log_y_axis' not in st.session_state:
@@ -218,9 +223,9 @@ with st.sidebar.container():
             value=default_filename,
             key="save_netlist_filename_sidebar" # Updated key
         )
-        if st.button("💾 Save Netlist", key="save_netlist_btn_sidebar", use_container_width=True, disabled=(not st.session_state.get('current_netlist') or st.session_state['current_netlist'] == INITIAL_NETLIST)): # Updated key
+        if st.button("💾 Save Netlist", key="save_netlist_btn_sidebar", use_container_width=True, disabled=(not st.session_state.get('current_netlist') or st.session_state['current_netlist'] == INITIAL_NETLIST or st.session_state['current_netlist'] == EMPTY_NETLIST)): # Updated key
             current_netlist = st.session_state.get('current_netlist', '')
-            if current_netlist and current_netlist != INITIAL_NETLIST:
+            if current_netlist and current_netlist != INITIAL_NETLIST and current_netlist != EMPTY_NETLIST:
                 fname = save_filename.strip()
                 if not fname.endswith(".net"):
                     fname += ".net"
@@ -286,6 +291,9 @@ if ai_summary:
 # Ensure text area displays the current state value directly
 # Do NOT assign to st.session_state.netlist_area here, let rerun handle it.
 netlist_display_value = st.session_state.get('current_netlist', INITIAL_NETLIST)
+# If the netlist is empty (after Clear All), use an empty string
+if netlist_display_value == EMPTY_NETLIST:
+    netlist_display_value = ""
 netlist_display = st.text_area(
     "Generated/Current Netlist:",
     value=netlist_display_value, # Bind value directly
@@ -318,6 +326,7 @@ with col1:
             generation_keywords = ['new circuit', 'generate', 'create', 'design a', 'make a', 'start over']
             use_generation_prompt = any(keyword in user_input.lower() for keyword in generation_keywords) or \
                                     current_netlist == INITIAL_NETLIST or \
+                                    current_netlist == EMPTY_NETLIST or \
                                     not current_netlist.strip()
 
             if use_generation_prompt:
@@ -380,7 +389,7 @@ with col2:
         current_config = st.session_state.get('config', {})
         ltspice_path_valid = current_config.get('ltspice_path') and os.path.isfile(current_config['ltspice_path'])
 
-        if not current_netlist or current_netlist == INITIAL_NETLIST:
+        if not current_netlist or current_netlist == INITIAL_NETLIST or current_netlist == EMPTY_NETLIST:
             st.warning("Netlist is empty or default. Generate a circuit first.")
         elif not ltspice_path_valid:
             st.error(f"Cannot simulate: LTSPICE path is invalid or not configured in settings.")
@@ -459,6 +468,17 @@ with col2:
                 st.toast(f"Cleaning up previous simulation files...", icon="🧹")
                 cleanup_simulation_files(previous_temp_dir) # Call cleanup
 
+            # --- Extract .plot directives from netlist ---
+            print("\nDEBUG: Netlist content for .plot extraction:")
+            print(netlist_to_simulate)
+            print("\nEND DEBUG\n")
+            plot_nodes = extract_plot_directives(netlist_to_simulate)
+            st.session_state['plot_directive_nodes'] = plot_nodes
+            if plot_nodes:
+                print(f"Found .plot directives for nodes: {plot_nodes}")
+            else:
+                print("WARNING: No .plot directives found in the netlist!")
+
             # --- Run New Simulation ---
             # Use toast instead of status placeholder
             st.toast("Running LTSPICE simulation...", icon="⚡")
@@ -466,6 +486,8 @@ with col2:
             st.session_state['plot_data'] = None
             st.session_state['available_variables'] = None
             st.session_state['selected_variables'] = []
+            # Reset first_load flag to ensure matched variables are used for the new simulation
+            st.session_state['first_load'] = True
 
             # Generate a unique filename with timestamp to avoid conflicts
             base_name = f"streamlit_sim_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
@@ -491,9 +513,216 @@ with col2:
                 elif df_data is not None and variables is not None:
                     st.session_state['plot_data'] = df_data
                     st.session_state['available_variables'] = variables
-                    # Optionally pre-select the first variable if available
-                    if variables:
+
+                    # Check for plot directive nodes and select them if available
+                    plot_directive_nodes = st.session_state.get('plot_directive_nodes', [])
+                    if plot_directive_nodes and variables:
+                        # Print available variables for debugging
+                        print(f"Available variables in raw file: {variables}")
+                        print(f"Plot directive nodes: {plot_directive_nodes}")
+
+                        # DIRECT APPROACH: Match any node in plot directives
+                        selected_vars = []
+
+                        # Process each node in the plot directives
+                        for plot_node in plot_directive_nodes:
+                            print(f"Processing plot directive node: {plot_node}")
+                            node_matched = False
+
+                            # Extract the node name if it's in V(node) format
+                            node_name = None
+                            if '(' in plot_node and ')' in plot_node:
+                                try:
+                                    node_type = plot_node.split('(')[0].upper()  # V or I
+                                    node_name = plot_node.split('(')[1].split(')')[0]  # Extract node name
+                                    print(f"Extracted node name: {node_name} from {plot_node}")
+                                except (IndexError, ValueError) as e:
+                                    print(f"Error extracting node name from {plot_node}: {e}")
+                            else:
+                                # If it's just a node name without V() wrapper
+                                node_name = plot_node
+                                print(f"Using direct node name: {node_name}")
+
+                            if node_name:
+                                # Convert to uppercase for case-insensitive comparison
+                                node_name_upper = node_name.upper()
+
+                                # STEP 1: Try exact match with V(node_name)
+                                for var in variables:
+                                    # Check if variable is V(node_name) with any case
+                                    if var.upper() == f"V({node_name_upper})":
+                                        selected_vars.append(var)
+                                        node_matched = True
+                                        print(f"Exact V(node) match: {var} for {plot_node}")
+                                        break
+
+                                # STEP 2: If not found, try to match just the node name
+                                if not node_matched:
+                                    for var in variables:
+                                        if var.upper() == node_name_upper:
+                                            selected_vars.append(var)
+                                            node_matched = True
+                                            print(f"Exact node name match: {var} for {plot_node}")
+                                            break
+
+                                # STEP 3: Try to find any V(node) where node contains our node name
+                                if not node_matched:
+                                    best_match = None
+                                    best_score = 0
+
+                                    for var in variables:
+                                        # Only consider voltage variables
+                                        if var.upper().startswith('V(') and var.upper().endswith(')'):
+                                            # Extract the variable's node name
+                                            var_node = var[2:-1]  # Remove V( and )
+
+                                            # Calculate match score
+                                            score = 0
+
+                                            # Exact match gets highest score
+                                            if var_node.upper() == node_name_upper:
+                                                score = 100
+                                            # Node name is part of variable node
+                                            elif node_name_upper in var_node.upper():
+                                                score = 50
+                                            # Variable node is part of node name
+                                            elif var_node.upper() in node_name_upper:
+                                                score = 30
+
+                                            # Prefer shorter variable names (more specific matches)
+                                            score -= len(var_node) * 0.1
+
+                                            if score > best_score:
+                                                best_score = score
+                                                best_match = var
+
+                                    if best_match:
+                                        selected_vars.append(best_match)
+                                        node_matched = True
+                                        print(f"Best V(node) match: {best_match} for {plot_node} (score: {best_score})")
+
+                                # STEP 4: Last resort - try any variable containing the node name
+                                if not node_matched:
+                                    for var in variables:
+                                        if node_name_upper in var.upper():
+                                            selected_vars.append(var)
+                                            node_matched = True
+                                            print(f"Substring match: {var} contains {node_name}")
+                                            break
+
+                            # If we still couldn't match this node, print a warning
+                            if not node_matched:
+                                print(f"WARNING: Could not find a match for plot node: {plot_node}")
+
+                        # If we didn't find any matches, default to the first variable
+                        if not selected_vars and variables:
+                            selected_vars = [variables[0]]
+                            print(f"No matches found for any plot nodes. Defaulting to first variable: {variables[0]}")
+
+                        # IMPROVED APPROACH: Select all variables from plot directives
+                        # This replaces the previous direct override approach
+                        all_matched_vars = []
+                        print(f"Attempting to match all plot nodes: {plot_directive_nodes}")
+
+                        # First, try to match each plot node with available variables
+                        for plot_node in plot_directive_nodes:
+                            node_matched = False
+
+                            # Direct match for common cases
+                            if plot_node.upper() == 'V(IN)' and 'V(in)' in variables:
+                                all_matched_vars.append('V(in)')
+                                print(f"Direct match: {plot_node} -> V(in)")
+                                node_matched = True
+                            elif plot_node.upper() == 'V(OUT)' and 'V(out)' in variables:
+                                all_matched_vars.append('V(out)')
+                                print(f"Direct match: {plot_node} -> V(out)")
+                                node_matched = True
+                            elif plot_node.upper() == 'V(MID)' and 'V(mid)' in variables:
+                                all_matched_vars.append('V(mid)')
+                                print(f"Direct match: {plot_node} -> V(mid)")
+                                node_matched = True
+
+                            # Case-insensitive match for any variable
+                            if not node_matched:
+                                for var in variables:
+                                    if var.upper() == plot_node.upper():
+                                        all_matched_vars.append(var)
+                                        print(f"Case-insensitive match: {plot_node} -> {var}")
+                                        node_matched = True
+                                        break
+
+                            # If still not matched, try to extract node name
+                            if not node_matched and '(' in plot_node and ')' in plot_node:
+                                try:
+                                    node_type = plot_node.split('(')[0].upper()  # V or I
+                                    node_name = plot_node.split('(')[1].split(')')[0]  # Extract node name
+
+                                    for var in variables:
+                                        if var.upper() == f"{node_type}({node_name.upper()})":
+                                            all_matched_vars.append(var)
+                                            print(f"Node name match: {plot_node} -> {var}")
+                                            node_matched = True
+                                            break
+                                except (IndexError, ValueError) as e:
+                                    print(f"Error extracting node name from {plot_node}: {e}")
+
+                            if not node_matched:
+                                print(f"Could not match plot node: {plot_node}")
+
+                        # If we found any matches, use them instead of the previous selection
+                        if all_matched_vars:
+                            selected_vars = all_matched_vars
+                            print(f"OVERRIDE: Selected all matched variables: {selected_vars}")
+                        elif selected_vars:  # Keep any previously matched variables if we didn't find direct matches
+                            print(f"Keeping previously matched variables: {selected_vars}")
+                        else:  # If no matches at all, default to first variable
+                            selected_vars = [variables[0]]
+                            print(f"No matches found, defaulting to first variable: {variables[0]}")
+
+                        # Remove duplicates while preserving order
+                        selected_vars = list(dict.fromkeys(selected_vars))
+                        print(f"Final selected variables (after removing duplicates): {selected_vars}")
+
+                        # The old standard matching code is now replaced by the direct approach above
+
+                        # If we found matches, use them
+                        if selected_vars:
+                            # For debugging, print what we found
+                            print(f"Final selected variables: {selected_vars}")
+
+                            # We've already handled special cases with direct overrides above
+
+                            # CRITICAL: Force the selection of all variables from the .plot directive
+                            # Update session state with selected variables
+                            st.session_state['selected_variables'] = selected_vars
+                            # Also update the multiselect widget state
+                            st.session_state['plot_variables_select'] = selected_vars.copy()
+                            # Set a flag to force the selection on the next rerun
+                            st.session_state['force_plot_selection'] = True
+                            print(f"Auto-selected variables from .plot directives: {selected_vars}")
+                            # Add a message to the simulation status to inform the user
+                            auto_select_msg = f"Auto-selected plot variables from .plot directive: {', '.join(selected_vars)}"
+                            st.session_state['last_sim_status']['message'] += f"\n✅ {auto_select_msg}"
+                            # Force a rerun to update the UI with the selected variables
+                            st.rerun()
+                        else:
+                            # If no matches found, fall back to selecting the first variable
+                            st.session_state['selected_variables'] = [variables[0]]
+                            # Also update the multiselect widget state
+                            st.session_state['plot_variables_select'] = [variables[0]]
+                            # Set a flag to force the selection on the next rerun
+                            st.session_state['force_plot_selection'] = True
+                            print(f"No matches found for plot nodes {plot_directive_nodes}, defaulting to first variable")
+                            # Force a rerun to update the UI with the selected variables
+                            st.rerun()
+                    elif variables:
+                        # If no plot directives, select the first variable as before
                         st.session_state['selected_variables'] = [variables[0]]
+                        # Also update the multiselect widget state
+                        st.session_state['plot_variables_select'] = [variables[0]]
+                        # Set a flag to force the selection on the next rerun
+                        st.session_state['force_plot_selection'] = True
+
                     print("DEBUG: Successfully parsed RAW file. Variables:", variables) # Debug
                 else:
                     # Handle case where parse_raw_file returns None, None, None (shouldn't happen ideally)
@@ -554,7 +783,7 @@ with col3:
             st.warning("No simulation results (.raw) file available. Run a simulation first.")
 with col4:
     if st.button("🗑️ Clear All", use_container_width=True): # Added icon
-         st.session_state['current_netlist'] = INITIAL_NETLIST
+         st.session_state['current_netlist'] = EMPTY_NETLIST # Use empty string instead of INITIAL_NETLIST
          st.session_state['user_input'] = "" # Clear user input state too
          # Clear AI summary message
          st.session_state['ai_summary_message'] = None
@@ -573,13 +802,179 @@ if plot_data is not None and not plot_data.empty:
     st.divider()
     st.subheader("📊 Simulation Plot")
     if available_vars:
-        # Use current selection from state as default
-        selected_vars = st.multiselect(
-            "Select variables to plot:",
-            options=available_vars,
-            default=st.session_state.get('selected_variables', []) # Use state for persistence
-        )
-        # Update state with current selection
+        # FINAL SOLUTION: Use a completely different approach to avoid the warning
+
+        # Create a unique key for the multiselect widget
+        multiselect_key = "plot_variables_select"
+
+        # Get the plot directive nodes and find their corresponding variables
+        plot_directive_nodes = st.session_state.get('plot_directive_nodes', [])
+
+        # Print debug information
+        print(f"Plot directive nodes: {plot_directive_nodes}")
+        print(f"Available variables: {available_vars}")
+
+        # Match plot directive nodes with available variables
+        matched_vars = []
+
+        # Try to match each plot directive node with available variables
+        for node in plot_directive_nodes:
+            node_upper = node.upper()
+            matched = False
+
+            # Try exact match first
+            for var in available_vars:
+                if var.upper() == node_upper:
+                    matched_vars.append(var)
+                    print(f"Exact match: {node} -> {var}")
+                    matched = True
+                    break
+
+            # If not matched, try to extract node name
+            if not matched and '(' in node and ')' in node:
+                try:
+                    node_type = node.split('(')[0].upper()  # V or I
+                    node_name = node.split('(')[1].split(')')[0]  # Extract node name
+                    node_name_upper = node_name.upper()
+
+                    for var in available_vars:
+                        if var.upper() == f"{node_type}({node_name_upper})":
+                            matched_vars.append(var)
+                            print(f"Node name match: {node} -> {var}")
+                            matched = True
+                            break
+                except (IndexError, ValueError) as e:
+                    print(f"Error extracting node name from {node}: {e}")
+
+            if not matched:
+                print(f"Could not match plot node: {node}")
+
+        # If we didn't find any matches, use the first variable
+        if not matched_vars and available_vars:
+            matched_vars = [available_vars[0]]
+            print(f"No matches found, defaulting to first variable: {available_vars[0]}")
+
+        # Remove duplicates while preserving order
+        matched_vars = list(dict.fromkeys(matched_vars))
+        print(f"Final matched variables: {matched_vars}")
+
+        # Check if we need to clear the selection
+        if st.session_state.get('clear_selection', False):
+            # Initialize an empty list for the multiselect widget
+            if multiselect_key in st.session_state:
+                # We can't directly modify the widget's value, so we'll use a different approach
+                # Set a flag to indicate that the widget should be empty
+                st.session_state['empty_selection'] = True
+            # Reset the flag
+            st.session_state['clear_selection'] = False
+            print("Clearing selection due to clear_selection flag")
+        # Check if we need to apply the plot nodes
+        elif st.session_state.get('apply_plot_nodes', False):
+            # We can't directly modify the widget's value, so we'll use a different approach
+            # Set a flag to indicate that the widget should use the matched variables
+            st.session_state['apply_selection'] = True
+            # Get the matched variables from the session state
+            apply_vars = st.session_state.get('apply_matched_vars', [])
+            if apply_vars:
+                print(f"Applying plot nodes: {apply_vars}")
+            else:
+                print("No plot nodes to apply")
+            # Reset the flag
+            st.session_state['apply_plot_nodes'] = False
+        # CRITICAL: Force the selection of all variables from the .plot directive
+        # if the force_plot_selection flag is set
+        elif st.session_state.get('force_plot_selection', False):
+            # We can't directly modify the widget's value, so we'll use a different approach
+            # Set a flag to indicate that the widget should use the matched variables
+            st.session_state['apply_selection'] = True
+            # Store the matched variables in the session state
+            st.session_state['apply_matched_vars'] = matched_vars.copy()
+            print(f"FORCED: Setting session state to matched variables: {matched_vars}")
+            # Reset the flag to avoid overwriting user selections on subsequent runs
+            st.session_state['force_plot_selection'] = False
+            # Also reset first_load flag
+            st.session_state['first_load'] = False
+            # Reset the empty_selection flag
+            st.session_state['empty_selection'] = False
+        # Otherwise, set the session state to matched variables when the app first loads
+        # or when the multiselect widget is empty
+        elif multiselect_key not in st.session_state or not st.session_state[multiselect_key] or \
+             (matched_vars and st.session_state.get('first_load', True)):
+            st.session_state[multiselect_key] = matched_vars
+            print(f"Setting session state to matched variables: {matched_vars}")
+            # Reset the empty_selection flag
+            st.session_state['empty_selection'] = False
+            # Set first_load to False to avoid overwriting user selections on subsequent runs
+            st.session_state['first_load'] = False
+
+        # Add a label for the plot variables selection
+        st.write("Select variables to plot:")
+
+        # Create a layout with the multiselect and buttons on the same line
+        col1, col2, col3 = st.columns([6, 1, 1])
+
+        with col1:
+            # If empty_selection flag is set, create a new key to force an empty selection
+            if st.session_state.get('empty_selection', False):
+                # Create a unique key with a timestamp to force a new widget instance
+                empty_key = f"empty_select_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+                selected_vars = st.multiselect(
+                    "Select variables to plot:",
+                    options=available_vars,
+                    key=empty_key,
+                    label_visibility="collapsed"  # Hide the label to align with buttons
+                )
+                # Reset the flag
+                st.session_state['empty_selection'] = False
+                print(f"Using empty selection with key: {empty_key}")
+            # If apply_selection flag is set, create a new key to force the selection of matched variables
+            elif st.session_state.get('apply_selection', False):
+                # Get the matched variables from the session state
+                apply_vars = st.session_state.get('apply_matched_vars', [])
+                # Create a unique key with a timestamp to force a new widget instance
+                apply_key = f"apply_select_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+                selected_vars = st.multiselect(
+                    "Select variables to plot:",
+                    options=available_vars,
+                    default=apply_vars,
+                    key=apply_key,
+                    label_visibility="collapsed"  # Hide the label to align with buttons
+                )
+                # Reset the flag
+                st.session_state['apply_selection'] = False
+                print(f"Using apply selection with key: {apply_key}, vars: {apply_vars}")
+            else:
+                # Use the regular key
+                selected_vars = st.multiselect(
+                    "Select variables to plot:",
+                    options=available_vars,
+                    key=multiselect_key,
+                    label_visibility="collapsed"  # Hide the label to align with buttons
+                )
+                print(f"Current selection: {selected_vars}")
+
+        # Add the Apply .plot button if plot directives exist
+        if plot_directive_nodes:
+            # Create a string of plot nodes for the button help text
+            plot_nodes_str = ', '.join(plot_directive_nodes)
+
+            with col2:
+                if st.button("📊 Apply .plot", help=f"Apply the nodes specified in .plot directives: {plot_nodes_str}", use_container_width=True):
+                    # Set a flag to apply the matched variables on the next rerun
+                    st.session_state['apply_plot_nodes'] = True
+                    st.session_state['apply_matched_vars'] = matched_vars.copy()
+                    st.toast(f"Applied plot nodes: {', '.join(matched_vars)}")
+                    st.rerun()
+
+        # Always show the Clear button
+        with col3:
+            if st.button("🚫 Clear", help="Clear all selected variables", use_container_width=True):
+                # Set a flag to clear the selection on the next rerun
+                st.session_state['clear_selection'] = True
+                st.toast("Cleared all selected variables")
+                st.rerun()
+
+        # Update the session state with the current selection
         st.session_state['selected_variables'] = selected_vars
 
         # --- Add Log Scale Checkboxes ---

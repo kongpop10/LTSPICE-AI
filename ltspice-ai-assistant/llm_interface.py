@@ -87,20 +87,46 @@ async def get_llm_response(prompt: str, api_key: str, model: str, api_base: str)
         # await client.close() # Generally not needed for single calls with newer libraries
         pass
 
-def extract_spice_netlist(llm_response: str) -> str | None:
+def extract_spice_netlist(llm_response: str) -> tuple[str | None, str | None]:
     """
-    Extracts the SPICE netlist content from the LLM response,
-    expecting it within a ```spice ... ``` block.
-    Falls back to ```...``` or the entire response if plausible.
+    Extracts the SPICE netlist content and summary message from the LLM response.
+
+    Args:
+        llm_response: The raw response from the LLM
+
+    Returns:
+        A tuple containing (netlist, summary_message)
+        - netlist: The extracted SPICE netlist or None if not found
+        - summary_message: Any explanatory text outside the code block, or None if not present
     """
     if not llm_response:
-        return None
+        return None, None
+
+    # Initialize summary message as None
+    summary_message = None
+    netlist = None
 
     # Pattern 1: Look for ```spice ... ```
     match = re.search(r'```spice\s*([\s\S]*?)\s*```', llm_response, re.IGNORECASE)
     if match:
         print("Found ```spice ... ``` block.")
-        return match.group(1).strip()
+        netlist = match.group(1).strip()
+
+        # Extract summary message (text before and/or after the code block)
+        code_block = match.group(0)  # The entire code block including ```
+        parts = llm_response.split(code_block, 1)
+
+        # Combine text before and after the code block
+        summary_parts = []
+        if parts[0].strip():
+            summary_parts.append(parts[0].strip())
+        if len(parts) > 1 and parts[1].strip():
+            summary_parts.append(parts[1].strip())
+
+        if summary_parts:
+            summary_message = "\n\n".join(summary_parts)
+
+        return netlist, summary_message
 
     # Pattern 2: Look for generic ``` ... ```
     match = re.search(r'```\s*([\s\S]*?)\s*```', llm_response)
@@ -110,11 +136,26 @@ def extract_spice_netlist(llm_response: str) -> str | None:
         content = match.group(1).strip()
         lines = content.split('\n')
         if lines and (lines[0].strip().startswith(('*', 'V', 'R', 'I', 'C', 'L', 'D', 'M', 'K', 'X', '.')) or lines[-1].strip().lower() == '.end'):
-             print("Content inside ``` looks like a netlist.")
-             return content
-        else:
-             print("Content inside ``` didn't look like a netlist, discarding.")
+            print("Content inside ``` looks like a netlist.")
+            netlist = content
 
+            # Extract summary message
+            code_block = match.group(0)  # The entire code block including ```
+            parts = llm_response.split(code_block, 1)
+
+            # Combine text before and after the code block
+            summary_parts = []
+            if parts[0].strip():
+                summary_parts.append(parts[0].strip())
+            if len(parts) > 1 and parts[1].strip():
+                summary_parts.append(parts[1].strip())
+
+            if summary_parts:
+                summary_message = "\n\n".join(summary_parts)
+
+            return netlist, summary_message
+        else:
+            print("Content inside ``` didn't look like a netlist, discarding.")
 
     # Pattern 3: Fallback - Check if the entire response might be a netlist
     print("No code block found, checking if entire response is a netlist.")
@@ -124,29 +165,54 @@ def extract_spice_netlist(llm_response: str) -> str | None:
        (lines[0].strip().startswith(('*', 'V', 'R', 'I', 'C', 'L', 'D', 'M', 'K', 'X', '.'))) and \
        (lines[-1].strip().lower() == '.end'):
         print("Entire response seems like a plausible netlist.")
-        return llm_response.strip()
+        netlist = llm_response.strip()
+        # No summary in this case since the entire response is the netlist
+        return netlist, None
 
     print("Could not extract a valid SPICE netlist from the response.")
-    return None
+    return None, llm_response  # Return the entire response as the summary if no netlist found
 
 # --- Add a test case for the extractor ---
 def test_extractor():
     print("\n--- Testing Netlist Extractor ---")
     test_cases = [
-        ("Some text before\n```spice\nV1 1 0 1V\nR1 1 0 1k\n.end\n```\nSome text after", "V1 1 0 1V\nR1 1 0 1k\n.end"),
-        ("```\nV1 1 0 1V\nR1 1 0 1k\n.end\n```", "V1 1 0 1V\nR1 1 0 1k\n.end"),
-        ("* Just the netlist\nV1 1 0 1V\nR1 1 0 1k\n.end", "* Just the netlist\nV1 1 0 1V\nR1 1 0 1k\n.end"),
-        ("Here is the netlist:\n```spice\n* Comment\nV1 1 0 5V\nR1 1 0 10k\n.tran 1m\n.end\n```", "* Comment\nV1 1 0 5V\nR1 1 0 10k\n.tran 1m\n.end"),
-        ("Sure, here it is:\n V1 1 0 1V\n R1 1 0 1k\n .end ", None), # Should fail without ``` or * start AND .end
-        ("```cpp\nint main() { return 0; }\n```", None), # Wrong language tag, content rejected
+        # Input, Expected (netlist, summary)
+        ("Some text before\n```spice\nV1 1 0 1V\nR1 1 0 1k\n.end\n```\nSome text after",
+         ("V1 1 0 1V\nR1 1 0 1k\n.end", "Some text before\n\nSome text after")),
+
+        ("```\nV1 1 0 1V\nR1 1 0 1k\n.end\n```",
+         ("V1 1 0 1V\nR1 1 0 1k\n.end", None)),
+
+        ("* Just the netlist\nV1 1 0 1V\nR1 1 0 1k\n.end",
+         ("* Just the netlist\nV1 1 0 1V\nR1 1 0 1k\n.end", None)),
+
+        ("Here is the netlist:\n```spice\n* Comment\nV1 1 0 5V\nR1 1 0 10k\n.tran 1m\n.end\n```",
+         ("* Comment\nV1 1 0 5V\nR1 1 0 10k\n.tran 1m\n.end", "Here is the netlist:")),
+
+        ("I've created a simple RC circuit with a 5V source.\n```spice\n* RC Circuit\nV1 1 0 5V\nR1 1 2 1k\nC1 2 0 1uF\n.tran 10ms\n.end\n```\nThe circuit has a time constant of 1ms (R*C = 1k * 1uF).",
+         ("* RC Circuit\nV1 1 0 5V\nR1 1 2 1k\nC1 2 0 1uF\n.tran 10ms\n.end", "I've created a simple RC circuit with a 5V source.\n\nThe circuit has a time constant of 1ms (R*C = 1k * 1uF).")),
+
+        ("Sure, here it is:\n V1 1 0 1V\n R1 1 0 1k\n .end ",
+         (None, "Sure, here it is:\n V1 1 0 1V\n R1 1 0 1k\n .end ")), # Should fail without ``` or * start AND .end
+
+        ("```cpp\nint main() { return 0; }\n```",
+         (None, "```cpp\nint main() { return 0; }\n```")), # Wrong language tag, content rejected
     ]
+
     for i, (input_str, expected_output) in enumerate(test_cases):
-        result = extract_spice_netlist(input_str)
+        netlist, summary = extract_spice_netlist(input_str)
+        expected_netlist, expected_summary = expected_output
+
         print(f"Test Case {i+1}: ", end="")
-        if result == expected_output:
+        if netlist == expected_netlist and summary == expected_summary:
             print("Passed")
         else:
-            print(f"Failed! Input:\n'''{input_str}'''\nExpected:\n'''{expected_output}'''\nGot:\n'''{result}'''")
+            print("Failed!")
+            print(f"Input:\n'''{input_str}'''")
+            print(f"Expected netlist:\n'''{expected_netlist}'''")
+            print(f"Got netlist:\n'''{netlist}'''")
+            print(f"Expected summary:\n'''{expected_summary}'''")
+            print(f"Got summary:\n'''{summary}'''")
             print("-" * 20)
 
 # List of alternative models that can be suggested when a model expires
