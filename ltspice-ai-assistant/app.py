@@ -695,8 +695,6 @@ with col2:
                             # CRITICAL: Force the selection of all variables from the .plot directive
                             # Update session state with selected variables
                             st.session_state['selected_variables'] = selected_vars
-                            # Also update the multiselect widget state
-                            st.session_state['plot_variables_select'] = selected_vars.copy()
                             # Set a flag to force the selection on the next rerun
                             st.session_state['force_plot_selection'] = True
                             print(f"Auto-selected variables from .plot directives: {selected_vars}")
@@ -708,8 +706,6 @@ with col2:
                         else:
                             # If no matches found, fall back to selecting the first variable
                             st.session_state['selected_variables'] = [variables[0]]
-                            # Also update the multiselect widget state
-                            st.session_state['plot_variables_select'] = [variables[0]]
                             # Set a flag to force the selection on the next rerun
                             st.session_state['force_plot_selection'] = True
                             print(f"No matches found for plot nodes {plot_directive_nodes}, defaulting to first variable")
@@ -718,8 +714,6 @@ with col2:
                     elif variables:
                         # If no plot directives, select the first variable as before
                         st.session_state['selected_variables'] = [variables[0]]
-                        # Also update the multiselect widget state
-                        st.session_state['plot_variables_select'] = [variables[0]]
                         # Set a flag to force the selection on the next rerun
                         st.session_state['force_plot_selection'] = True
 
@@ -848,52 +842,23 @@ if plot_data is not None and not plot_data.empty:
         matched_vars = list(dict.fromkeys(matched_vars))
         print(f"Final matched variables: {matched_vars}")
 
-        # Check if we need to clear the selection
-        if st.session_state.get('clear_selection', False):
-            # Initialize an empty list for the multiselect widget
-            if multiselect_key in st.session_state:
-                # We can't directly modify the widget's value, so we'll use a different approach
-                # Set a flag to indicate that the widget should be empty
-                st.session_state['empty_selection'] = True
-            # Reset the flag
-            st.session_state['clear_selection'] = False
-            print("Clearing selection due to clear_selection flag")
-        # Check if we need to apply the plot nodes
-        elif st.session_state.get('apply_plot_nodes', False):
-            # We can't directly modify the widget's value, so we'll use a different approach
-            # Set a flag to indicate that the widget should use the matched variables
-            st.session_state['apply_selection'] = True
-            # Get the matched variables from the session state
-            apply_vars = st.session_state.get('apply_matched_vars', [])
-            if apply_vars:
-                print(f"Applying plot nodes: {apply_vars}")
-            else:
-                print("No plot nodes to apply")
-            # Reset the flag
-            st.session_state['apply_plot_nodes'] = False
-        # CRITICAL: Force the selection of all variables from the .plot directive
-        # if the force_plot_selection flag is set
-        elif st.session_state.get('force_plot_selection', False):
-            # We can't directly modify the widget's value, so we'll use a different approach
-            # Set a flag to indicate that the widget should use the matched variables
-            st.session_state['apply_selection'] = True
-            # Store the matched variables in the session state
-            st.session_state['apply_matched_vars'] = matched_vars.copy()
-            print(f"FORCED: Setting session state to matched variables: {matched_vars}")
+        # Handle the force_plot_selection flag - this is set when a simulation is run with .plot directives
+        if st.session_state.get('force_plot_selection', False):
+            # Directly update the multiselect widget's value with matched variables
+            st.session_state[multiselect_key] = matched_vars.copy()
+            # Also update the selected_variables session state
+            st.session_state['selected_variables'] = matched_vars.copy()
+            print(f"FORCED: Setting selection to matched variables: {matched_vars}")
             # Reset the flag to avoid overwriting user selections on subsequent runs
             st.session_state['force_plot_selection'] = False
             # Also reset first_load flag
             st.session_state['first_load'] = False
-            # Reset the empty_selection flag
-            st.session_state['empty_selection'] = False
-        # Otherwise, set the session state to matched variables when the app first loads
-        # or when the multiselect widget is empty
+        # Initialize the widget with matched variables on first load or when empty
         elif multiselect_key not in st.session_state or not st.session_state[multiselect_key] or \
              (matched_vars and st.session_state.get('first_load', True)):
+            # Directly update the multiselect widget's value
             st.session_state[multiselect_key] = matched_vars
-            print(f"Setting session state to matched variables: {matched_vars}")
-            # Reset the empty_selection flag
-            st.session_state['empty_selection'] = False
+            print(f"Setting initial selection to matched variables: {matched_vars}")
             # Set first_load to False to avoid overwriting user selections on subsequent runs
             st.session_state['first_load'] = False
 
@@ -903,66 +868,72 @@ if plot_data is not None and not plot_data.empty:
         # Create a layout with the multiselect and buttons on the same line
         col1, col2, col3 = st.columns([6, 1, 1])
 
+        # Define a callback function to handle changes to the multiselect widget
+        def on_multiselect_change():
+            # This function will be called when the user interacts with the multiselect widget
+            print(f"Multiselect changed to: {st.session_state[multiselect_key]}")
+            # Update the session state with the current selection
+            st.session_state['selected_variables'] = st.session_state[multiselect_key]
+
         with col1:
-            # If empty_selection flag is set, create a new key to force an empty selection
+            # If empty_selection flag is set, we want to clear the selection
             if st.session_state.get('empty_selection', False):
-                # Create a unique key with a timestamp to force a new widget instance
-                empty_key = f"empty_select_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
-                selected_vars = st.multiselect(
-                    "Select variables to plot:",
-                    options=available_vars,
-                    key=empty_key,
-                    label_visibility="collapsed"  # Hide the label to align with buttons
-                )
+                # Instead of creating a new widget with a new key, update the existing widget's value
+                st.session_state[multiselect_key] = []
                 # Reset the flag
                 st.session_state['empty_selection'] = False
-                print(f"Using empty selection with key: {empty_key}")
-            # If apply_selection flag is set, create a new key to force the selection of matched variables
+                print(f"Cleared selection in existing widget")
+
+            # If apply_selection flag is set, we want to apply specific variables
             elif st.session_state.get('apply_selection', False):
                 # Get the matched variables from the session state
                 apply_vars = st.session_state.get('apply_matched_vars', [])
-                # Create a unique key with a timestamp to force a new widget instance
-                apply_key = f"apply_select_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
-                selected_vars = st.multiselect(
-                    "Select variables to plot:",
-                    options=available_vars,
-                    default=apply_vars,
-                    key=apply_key,
-                    label_visibility="collapsed"  # Hide the label to align with buttons
-                )
+                # Update the existing widget's value
+                st.session_state[multiselect_key] = apply_vars
                 # Reset the flag
                 st.session_state['apply_selection'] = False
-                print(f"Using apply selection with key: {apply_key}, vars: {apply_vars}")
-            else:
-                # Use the regular key
-                selected_vars = st.multiselect(
-                    "Select variables to plot:",
-                    options=available_vars,
-                    key=multiselect_key,
-                    label_visibility="collapsed"  # Hide the label to align with buttons
-                )
-                print(f"Current selection: {selected_vars}")
+                print(f"Applied variables to existing widget: {apply_vars}")
+
+            # Always use the same key for the multiselect widget to maintain state
+            selected_vars = st.multiselect(
+                "Select variables to plot:",
+                options=available_vars,
+                key=multiselect_key,
+                on_change=on_multiselect_change,
+                label_visibility="collapsed"  # Hide the label to align with buttons
+            )
+            print(f"Current selection: {selected_vars}")
 
         # Add the Apply .plot button if plot directives exist
         if plot_directive_nodes:
             # Create a string of plot nodes for the button help text
             plot_nodes_str = ', '.join(plot_directive_nodes)
 
+            # Define a callback for the Apply .plot button
+            def on_apply_plot():
+                # Set a flag to apply the matched variables on the next rerun
+                st.session_state['apply_selection'] = True
+                st.session_state['apply_matched_vars'] = matched_vars.copy()
+                st.toast(f"Applied plot nodes: {', '.join(matched_vars)}")
+
             with col2:
-                if st.button("📊 Apply .plot", help=f"Apply the nodes specified in .plot directives: {plot_nodes_str}", use_container_width=True):
-                    # Set a flag to apply the matched variables on the next rerun
-                    st.session_state['apply_plot_nodes'] = True
-                    st.session_state['apply_matched_vars'] = matched_vars.copy()
-                    st.toast(f"Applied plot nodes: {', '.join(matched_vars)}")
-                    st.rerun()
+                st.button("📊 Apply .plot",
+                          help=f"Apply the nodes specified in .plot directives: {plot_nodes_str}",
+                          on_click=on_apply_plot,
+                          use_container_width=True)
 
         # Always show the Clear button
+        # Define a callback for the Clear button
+        def on_clear_variables():
+            # Set a flag to clear the selection on the next rerun
+            st.session_state['empty_selection'] = True
+            st.toast("Cleared all selected variables")
+
         with col3:
-            if st.button("🚫 Clear", help="Clear all selected variables", use_container_width=True):
-                # Set a flag to clear the selection on the next rerun
-                st.session_state['clear_selection'] = True
-                st.toast("Cleared all selected variables")
-                st.rerun()
+            st.button("🚫 Clear",
+                      help="Clear all selected variables",
+                      on_click=on_clear_variables,
+                      use_container_width=True)
 
         # Update the session state with the current selection
         st.session_state['selected_variables'] = selected_vars
