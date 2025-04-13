@@ -13,7 +13,10 @@ An AI-powered assistant to automate and enhance circuit simulations using LTspic
 - **Parse Simulation Results**: Extract and analyze waveform data from LTspice `.raw` files.
 - **LLM Integration**: Use language models to generate SPICE netlists, analyze results, or assist with design.
 - **Manage Settings**: Save and load user preferences for simulation workflows.
-- **Interactive Interface**: Command-line or script-driven interaction for flexible usage.
+- **Interactive Interface**: User-friendly Streamlit interface for easy interaction.
+- **File Management**: Load and save netlists with automatic file path detection.
+- **Custom Directory Selection**: Browse and select directories for saving files.
+- **Flexible File Extensions**: Save files with custom extensions or use the default .net extension.
 
 ---
 
@@ -65,36 +68,43 @@ pip install numpy scipy matplotlib pyltspice openai streamlit python-dotenv
 
 4. **Configure Environment Variables**
 
-Create a `.env` file in the project root with your API keys:
+Create a `.env` file in the project root with your API keys and configuration:
 
 ```
 OPENROUTER_API_KEY=your_openrouter_api_key_here
-# Add any other API keys as needed
+OPENROUTER_API_BASE=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=openrouter/anthropic/claude-3-sonnet:beta
+LTSPICE_PATH=C:\Program Files\ADI\LTspice\LTspice.exe
 ```
 
-The application uses these environment variables to authenticate with the LLM API services. You can obtain an OpenRouter API key by signing up at [OpenRouter](https://openrouter.ai/).
+The application uses these environment variables to authenticate with the LLM API services and locate your LTspice installation. You can obtain an OpenRouter API key by signing up at [OpenRouter](https://openrouter.ai/).
 
 5. **Configure LTspice Path**
 
-Ensure LTspice is installed on your system. Update the path in the settings (`settings.json`) or via the assistant interface.
+Ensure LTspice is installed on your system. The path can be configured in three ways:
+- In the `.env` file as shown above
+- Update the path in the settings (`settings.json`)
+- Via the assistant's settings interface in the sidebar
 
 ---
 
 ## Usage
 
-Run the main application:
-
-```bash
-python ltspice-ai-assistant/app.py
-```
-
-Or if using Streamlit interface:
+Run the Streamlit interface (recommended):
 
 ```bash
 streamlit run ltspice-ai-assistant/app.py
 ```
 
-Follow the prompts or integrate the modules into your own Python scripts.
+This will launch the web interface in your default browser. The interface provides:
+
+- **Circuit Description**: Enter natural language descriptions to generate netlists
+- **File Management**: Load and save netlists with automatic file detection
+- **Simulation**: Run LTspice simulations directly from the interface
+- **Visualization**: Plot and analyze simulation results
+- **Settings**: Configure API keys, LTspice path, and other options
+
+You can also integrate the modules into your own Python scripts for custom automation.
 
 ---
 
@@ -115,9 +125,15 @@ Follow the prompts or integrate the modules into your own Python scripts.
 - Python 3.8+
 - [LTspice](https://www.analog.com/en/design-center/design-tools-and-calculators/ltspice-simulator.html)
 - [PyLTSpice](https://github.com/PyLTSpice/PyLTSpice)
-- numpy, scipy, matplotlib
-- openai (for LLM integration)
+- numpy, scipy, pandas, matplotlib
 - streamlit (for web interface)
+- python-dotenv (for environment variable management)
+- tkinter (for directory selection dialogs)
+- requests (for API communication)
+
+Optional dependencies:
+- altair (for enhanced plotting)
+- openai (for OpenAI API integration)
 
 ---
 
@@ -127,8 +143,28 @@ MIT
 
 ---
 
+## Recent Updates
+
+### UI Improvements
+- Added automatic netlist loading when a file is selected
+- Improved file path detection for better file management
+- Added directory browser for selecting custom save locations
+- Made the browse button horizontally aligned with the directory text input
+- Added flexible file extension handling (custom extensions or default .net)
+- Enhanced error handling and user feedback
+
+### File Management
+- Added ability to save edited netlists back to their original location
+- Improved file search to find files across common LTspice directories
+- Added intelligent file path detection for uploaded files
+
+### User Experience
+- Added helpful tooltips and instructions throughout the interface
+- Improved error messages and status indicators
+- Enhanced layout and visual organization
+
 ## Acknowledgments
 
 - Analog Devices for LTspice.
 - The PyLTSpice community.
-- OpenAI for LLM integration.
+- OpenAI and Anthropic for LLM integration.

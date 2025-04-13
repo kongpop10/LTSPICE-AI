@@ -14,7 +14,7 @@ from settings_manager import load_settings, save_settings, is_model_expired, DEF
 from llm_interface import get_llm_response, extract_spice_netlist, is_model_expired_message, extract_model_expired_message, get_alternative_models # Will be refactored later
 from prompts import NETLIST_GENERATION_PROMPT_TEMPLATE, NETLIST_MODIFICATION_PROMPT_TEMPLATE, ADD_SIMULATION_PROMPT_TEMPLATE
 from ltspice_runner import run_ltspice_simulation, cleanup_simulation_files # Will be refactored later
-from file_utils import open_file_with_default_app
+from file_utils import open_file_with_default_app, get_file_path_from_upload, find_file_in_directory, select_directory_dialog
 from raw_parser import parse_raw_file
 # Use the fixed netlist parser
 from netlist_parser_fixed import extract_plot_directives
@@ -159,25 +159,87 @@ st.sidebar.title("Output & Actions")
 # --- Load Netlist from File (Sidebar) ---
 with st.sidebar.container():
     st.subheader("Load Netlist")
-    uploaded_file = st.file_uploader("Upload a netlist file (.net, .cir)", type=["net", "cir", "txt"], key="netlist_file_uploader")
+    # Store the previous uploaded file name to detect changes
+    previous_file_name = st.session_state.get('previous_uploaded_file_name', None)
 
-    if uploaded_file is not None:
-        if st.button("📂 Load Netlist", key="load_netlist_btn", use_container_width=True):
-            try:
-                # Read the content of the uploaded file
-                netlist_content = uploaded_file.getvalue().decode("utf-8")
+    # Use a callback function to handle file upload changes
+    def on_file_upload_change():
+        if 'netlist_file_uploader' in st.session_state and st.session_state['netlist_file_uploader'] is not None:
+            uploaded_file = st.session_state['netlist_file_uploader']
+            current_file_name = uploaded_file.name
 
-                # Update the current netlist in the session state
-                st.session_state['current_netlist'] = netlist_content
+            # Check if this is a new file upload (different from previous)
+            if current_file_name != st.session_state.get('previous_uploaded_file_name', None):
+                try:
+                    # Read the content of the uploaded file
+                    netlist_content = uploaded_file.getvalue().decode("utf-8")
 
-                # Show success message
-                st.success(f"Loaded netlist from {uploaded_file.name}")
-                st.toast(f"Loaded {uploaded_file.name}", icon="📂")
+                    # Update the current netlist in the session state
+                    st.session_state['current_netlist'] = netlist_content
 
-                # Rerun to update the UI
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error loading netlist: {e}")
+                    # Store the current file name for future comparison
+                    st.session_state['previous_uploaded_file_name'] = current_file_name
+
+                    # Store the original file path if available
+                    file_path, file_name = get_file_path_from_upload(uploaded_file)
+
+                    # If we couldn't get the file path directly, try to find it in the workspace
+                    if file_path is None and file_name:
+                        # Try to find the file in the workspace
+                        found_path = find_file_in_directory(file_name)
+                        if found_path:
+                            file_path = found_path
+                            print(f"Found file in workspace: {file_path}")
+                            # Store a flag to show a success message about finding the file
+                            st.session_state['file_found_in_workspace'] = True
+                            st.session_state['found_file_path'] = file_path
+
+                    st.session_state['original_file_path'] = file_path
+                    st.session_state['original_file_name'] = file_name
+
+                    # Show success message (will appear after rerun)
+                    st.session_state['file_load_success'] = True
+                    st.session_state['loaded_file_name'] = current_file_name
+
+                    # Flag for rerun
+                    st.session_state['need_rerun_after_file_load'] = True
+                except Exception as e:
+                    st.session_state['file_load_error'] = str(e)
+
+    # File uploader with on_change callback
+    uploaded_file = st.file_uploader(
+        "Upload a netlist file (.net, .cir)",
+        type=["net", "cir", "txt"],
+        key="netlist_file_uploader",
+        on_change=on_file_upload_change
+    )
+
+    # Display success message if file was loaded
+    if st.session_state.get('file_load_success', False):
+        st.success(f"Loaded netlist from {st.session_state.get('loaded_file_name', '')}")
+        st.toast(f"Loaded {st.session_state.get('loaded_file_name', '')}", icon="📂")
+        # Clear the flag to avoid showing the message again
+        st.session_state['file_load_success'] = False
+
+    # Display message if file was found in workspace
+    if st.session_state.get('file_found_in_workspace', False):
+        found_path = st.session_state.get('found_file_path', '')
+        if found_path:
+            st.success(f"Found original file in workspace: {found_path}")
+            st.toast(f"Found file location", icon="🔍")
+        # Clear the flag to avoid showing the message again
+        st.session_state['file_found_in_workspace'] = False
+
+    # Display error message if there was an error
+    if 'file_load_error' in st.session_state and st.session_state['file_load_error']:
+        st.error(f"Error loading netlist: {st.session_state['file_load_error']}")
+        # Clear the error message
+        st.session_state['file_load_error'] = None
+
+    # Trigger rerun if needed
+    if st.session_state.get('need_rerun_after_file_load', False):
+        st.session_state['need_rerun_after_file_load'] = False
+        st.rerun()
 
 # --- Simulation Output & Actions (Sidebar) ---
 with st.sidebar.container():
@@ -210,36 +272,182 @@ with st.sidebar.container():
 
         # --- Action Buttons (Vertical Layout) ---
 
-        # --- Save Netlist ---
-        os.makedirs(SAVED_CIRCUITS_DIR, exist_ok=True)
-        default_filename = "my_circuit.net"
-        last_sim_temp_dir = st.session_state.get('last_sim_temp_dir')
-        last_raw_file = st.session_state.get('last_raw_file')
-        if last_sim_temp_dir and last_raw_file:
-            default_filename = f"{os.path.basename(last_raw_file).split('.')[0]}.net"
+        # --- Save Netlist Section ---
+        st.subheader("Save Netlist")
 
+        # Check if we have a valid netlist to save
+        has_valid_netlist = (st.session_state.get('current_netlist') and
+                            st.session_state['current_netlist'] != INITIAL_NETLIST and
+                            st.session_state['current_netlist'] != EMPTY_NETLIST)
+
+        # Get the original file path if available
+        original_file_path = st.session_state.get('original_file_path')
+        original_file_name = st.session_state.get('original_file_name')
+
+        # Option to save back to original file
+        if original_file_path and os.path.isfile(original_file_path):
+            if st.button("💾 Save to Original File", key="save_to_original_btn",
+                       use_container_width=True, disabled=not has_valid_netlist):
+                current_netlist = st.session_state.get('current_netlist', '')
+                if has_valid_netlist:
+                    try:
+                        with open(original_file_path, 'w', encoding='utf-8') as f:
+                            f.write(current_netlist)
+                        st.success(f"Saved to original file: `{original_file_path}`")
+                        st.toast(f"Saved to {os.path.basename(original_file_path)}", icon="💾")
+                    except Exception as e:
+                        st.error(f"Error saving to original file: {e}")
+                else:
+                    st.warning("No netlist generated yet to save.")
+        elif original_file_name:
+            # Try to find the file one more time in case it was moved or renamed
+            found_path = find_file_in_directory(original_file_name)
+            if found_path and os.path.isfile(found_path):
+                # Update the session state with the found path
+                st.session_state['original_file_path'] = found_path
+                if st.button("💾 Save to Found Original File", key="save_to_found_file_btn",
+                           use_container_width=True, disabled=not has_valid_netlist):
+                    current_netlist = st.session_state.get('current_netlist', '')
+                    if has_valid_netlist:
+                        try:
+                            with open(found_path, 'w', encoding='utf-8') as f:
+                                f.write(current_netlist)
+                            st.success(f"Saved to found file: `{found_path}`")
+                            st.toast(f"Saved to {os.path.basename(found_path)}", icon="💾")
+                        except Exception as e:
+                            st.error(f"Error saving to found file: {e}")
+                    else:
+                        st.warning("No netlist generated yet to save.")
+            else:
+                # Show a more helpful message with instructions
+                st.info(f"Original file '{original_file_name}' path not available for direct saving. " +
+                        f"You can save to a custom location below.")
+
+        # Save to custom location
+        st.write("Save to custom location:")
+        os.makedirs(SAVED_CIRCUITS_DIR, exist_ok=True)
+
+        # Determine default filename
+        default_filename = "my_circuit.net"
+        # First try to use the original filename if available
+        if original_file_name:
+            default_filename = original_file_name
+        # Otherwise use the simulation filename if available
+        else:
+            last_sim_temp_dir = st.session_state.get('last_sim_temp_dir')
+            last_raw_file = st.session_state.get('last_raw_file')
+            if last_sim_temp_dir and last_raw_file:
+                default_filename = f"{os.path.basename(last_raw_file).split('.')[0]}.net"
+
+        # Save to custom location UI
         save_filename = st.text_input(
-            "Save Filename:", # Shorter label
+            "Filename:", # Shorter label
             value=default_filename,
-            key="save_netlist_filename_sidebar" # Updated key
+            key="save_netlist_filename_sidebar", # Updated key
+            help="Enter filename with or without extension. If no extension is provided, .net will be added automatically."
         )
-        if st.button("💾 Save Netlist", key="save_netlist_btn_sidebar", use_container_width=True, disabled=(not st.session_state.get('current_netlist') or st.session_state['current_netlist'] == INITIAL_NETLIST or st.session_state['current_netlist'] == EMPTY_NETLIST)): # Updated key
+
+        # Radio button for save location
+        save_location = st.radio(
+            "Save location:",
+            ["Default directory", "Custom path"],
+            key="save_location_radio",
+            horizontal=True
+        )
+
+        # Custom path input if selected
+        custom_save_path = None
+        if save_location == "Custom path":
+            # Initialize the directory path in session state if not already set
+            if 'custom_dir_path' not in st.session_state:
+                st.session_state['custom_dir_path'] = os.path.dirname(original_file_path) if original_file_path else SAVED_CIRCUITS_DIR
+
+            # Function to handle directory selection
+            def select_directory():
+                initial_dir = st.session_state.get('custom_dir_path', os.getcwd())
+                selected_dir = select_directory_dialog(initial_dir)
+                if selected_dir:
+                    st.session_state['custom_dir_path'] = selected_dir
+                    # Flag to trigger a rerun to update the UI
+                    st.session_state['need_rerun_after_dir_select'] = True
+                else:
+                    # If dialog fails or is canceled, show a message
+                    st.session_state['dir_select_error'] = True
+
+            # Create a container for the directory selection with a label above both controls
+            st.write("Custom directory path:")
+
+            # Create a horizontal layout with columns for the text input and browse button
+            dir_cols = st.columns([0.8, 0.2])
+
+            # Text input in the first column
+            with dir_cols[0]:
+                custom_dir = st.text_input(
+                    "",  # Empty label to remove the label
+                    value=st.session_state.get('custom_dir_path', ''),
+                    key="custom_save_dir",
+                    label_visibility="collapsed"  # Hide the label completely
+                )
+                # Update session state when text input changes
+                if custom_dir != st.session_state.get('custom_dir_path', ''):
+                    st.session_state['custom_dir_path'] = custom_dir
+
+            # Browse button in the second column
+            with dir_cols[1]:
+                # Use container width to make the button fill the column
+                st.button("📁 Browse", key="browse_dir_btn", on_click=select_directory, use_container_width=True)
+
+            # Display error message if directory selection failed
+            if st.session_state.get('dir_select_error', False):
+                st.info("No directory selected or dialog could not be opened. Please enter the path manually.")
+                st.session_state['dir_select_error'] = False
+
+            # Check if directory exists and show warning if not
+            if custom_dir and not os.path.isdir(custom_dir):
+                st.warning(f"Directory does not exist: {custom_dir}")
+            else:
+                custom_save_path = custom_dir
+
+            # Trigger rerun if needed after directory selection
+            if st.session_state.get('need_rerun_after_dir_select', False):
+                st.session_state['need_rerun_after_dir_select'] = False
+                st.rerun()
+
+        # Save button
+        if st.button("💾 Save Netlist", key="save_netlist_btn_sidebar",
+                   use_container_width=True, disabled=not has_valid_netlist):
             current_netlist = st.session_state.get('current_netlist', '')
-            if current_netlist and current_netlist != INITIAL_NETLIST and current_netlist != EMPTY_NETLIST:
+            if has_valid_netlist:
                 fname = save_filename.strip()
-                if not fname.endswith(".net"):
+                # Check if the filename has any extension
+                if '.' not in fname:
+                    # No extension provided, add .net as default
                     fname += ".net"
+                # Otherwise, respect the user's choice of extension
                 if not fname:
                     st.error("Please provide a valid filename.")
                 else:
-                    save_path = os.path.join(SAVED_CIRCUITS_DIR, fname)
-                    try:
-                        with open(save_path, 'w', encoding='utf-8') as f:
-                            f.write(current_netlist)
-                        st.success(f"Saved: `{save_path}`") # Shorter success
-                        st.toast(f"Saved {fname}", icon="💾")
-                    except Exception as e:
-                        st.error(f"Error saving: {e}") # Shorter error
+                    # Determine the save path based on the selected location
+                    if save_location == "Default directory":
+                        save_path = os.path.join(SAVED_CIRCUITS_DIR, fname)
+                    else:
+                        if custom_save_path and os.path.isdir(custom_save_path):
+                            save_path = os.path.join(custom_save_path, fname)
+                        else:
+                            st.error(f"Invalid save directory: {custom_save_path}")
+                            save_path = None
+
+                    # Save the file if we have a valid path
+                    if save_path:
+                        try:
+                            # Create directory if it doesn't exist
+                            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                            with open(save_path, 'w', encoding='utf-8') as f:
+                                f.write(current_netlist)
+                            st.success(f"Saved: `{save_path}`") # Shorter success
+                            st.toast(f"Saved {fname}", icon="💾")
+                        except Exception as e:
+                            st.error(f"Error saving: {e}") # Shorter error
             else:
                 st.warning("No netlist generated yet to save.")
 
